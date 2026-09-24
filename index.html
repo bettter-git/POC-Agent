@@ -267,7 +267,7 @@
       <h1 class="hero-h1">Hola, soy Toko IA</h1>
       <p class="hero-sub">Leo la INE, valido identidad, calculo una oferta y genero el contrato — todo en esta misma conversación.</p>
       <div class="suggest-grid">
-        <button class="suggest-card" onclick="quickReply('Quiero iniciar una nueva solicitud de crédito')">
+        <button class="suggest-card" onclick="startNewCase()">
           <div class="suggest-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></div>
           <div class="suggest-tx"><b>Nueva solicitud</b><span>Empieza con un cliente nuevo</span></div>
         </button>
@@ -325,7 +325,11 @@
    Cuando el AI Agent + Webhook estén listos:
    1) WEBHOOK_URL = "https://bettter.app.n8n.cloud/webhook/toko-agente"
    2) USE_DEMO_MODE = false
-   3) Body enviado: { sessionId, mensaje, imagen_base64? }
+   3) Body enviado: { sessionId, mensaje, imagen_base64?, tipo_imagen?, asesor_id, telefono_conocido? }
+      - telefono_conocido: se detecta automáticamente cuando el asesor escribe 10 dígitos
+        seguidos en la conversación, y viaja en cada mensaje posterior para que el backend
+        sepa a qué expediente pertenece una imagen (INE, selfie, firma). Se reinicia al
+        tocar "Nueva solicitud".
       Respuesta esperada del agente: { respuesta: "texto..." }
    ========================================================================= */
 const WEBHOOK_URL = "";
@@ -400,15 +404,34 @@ function initApp(){
   }
 }
 
-function getSessionId(){
-  let id = localStorage.getItem('toko_session_id');
+function getSessionId(forceNew){
+  let id = forceNew ? null : localStorage.getItem('toko_session_id');
   if(!id){
     id = 'sess_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
     localStorage.setItem('toko_session_id', id);
   }
   return id;
 }
-const sessionId = getSessionId();
+let sessionId = getSessionId();
+
+/* ---------- Teléfono del cliente en curso (para vincular imágenes al expediente correcto) ---------- */
+let clienteTelefono = localStorage.getItem('toko_cliente_telefono') || null;
+
+function detectarTelefono(texto){
+  if(!texto) return;
+  const match = texto.match(/\b\d{10}\b/);
+  if(match){
+    clienteTelefono = match[0];
+    localStorage.setItem('toko_cliente_telefono', clienteTelefono);
+  }
+}
+
+function startNewCase(){
+  clienteTelefono = null;
+  localStorage.removeItem('toko_cliente_telefono');
+  sessionId = getSessionId(true);
+  quickReply('Quiero iniciar una nueva solicitud de crédito');
+}
 
 let messages = [];
 let pendingImage = null;
@@ -497,6 +520,7 @@ async function sendMessage(){
   const text = input.value.trim();
   if(!text && !(pendingImage && pendingImageType)) return;
 
+  detectarTelefono(text);
   enterChatMode();
 
   messages.push({role:'user', text: text||'(imagen adjunta)', image:pendingImage, time: nowLabel()});
@@ -555,7 +579,7 @@ async function askAgent(mensaje, imagenBase64, tipoImagen){
   const res = await fetch(WEBHOOK_URL, {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ sessionId, mensaje, imagen_base64: imagenBase64, tipo_imagen: tipoImagen, asesor_id: asesorId })
+    body: JSON.stringify({ sessionId, mensaje, imagen_base64: imagenBase64, tipo_imagen: tipoImagen, asesor_id: asesorId, telefono_conocido: clienteTelefono })
   });
   if(!res.ok) throw new Error('Webhook respondió ' + res.status);
   const data = await res.json();
